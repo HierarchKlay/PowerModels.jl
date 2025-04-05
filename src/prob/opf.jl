@@ -20,7 +20,8 @@ function build_opf(pm::AbstractPowerModel)
     variable_branch_power(pm)
     variable_dcline_power(pm)
 
-    objective_min_fuel_and_flow_cost(pm)
+    # objective_min_fuel_and_flow_cost(pm)
+    objective_min_linear_cost(pm)
 
     constraint_model_voltage(pm)
 

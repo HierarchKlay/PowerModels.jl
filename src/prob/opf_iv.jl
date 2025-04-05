@@ -12,6 +12,7 @@ function build_opf_iv(pm::AbstractPowerModel)
     variable_dcline_current(pm)
 
     objective_min_fuel_and_flow_cost(pm)
+    objective_min_linear_cost(pm)
 
     for i in ids(pm, :ref_buses)
         constraint_theta_ref(pm, i)

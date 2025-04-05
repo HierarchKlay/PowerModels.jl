@@ -40,6 +40,42 @@ function solve_model(data::Dict{String,<:Any}, model_type::Type, optimizer, buil
     return result
 end
 
+"get the model and solve it simultaneously"
+function get_and_solve_model(file::String, model_type::Type, optimizer, build_method; kwargs...)
+    data = PowerModels.parse_file(file)
+    calc_perturbed_thermal_limits!(data)
+    # calc_thermal_limits!(data)
+    return get_and_solve_model(data, model_type, optimizer, build_method; kwargs...)
+end
+
+""
+function get_and_solve_model(data::Dict{String,<:Any}, model_type::Type, optimizer, build_method;
+        ref_extensions=[], solution_processors=[], relax_integrality=false,
+        multinetwork=false, kwargs...)
+
+    if multinetwork != _IM.ismultinetwork(data)
+        model_requirement = multinetwork ? "multi-network" : "single-network"
+        data_type = _IM.ismultinetwork(data) ? "multi-network" : "single-network"
+        Memento.error(_LOGGER, "attempted to build a $(model_requirement) model with $(data_type) data")
+    end
+
+    # store unexpected arguments as parameters
+    param = Dict()
+    for (kw, val) in kwargs
+        param[string(kw)] = val
+    end
+    data["param"] = param
+    start_time = time()
+    pm = instantiate_model(data, model_type, build_method; ref_extensions=ref_extensions)
+    # pm = instantiate_model(data, model_type, build_method; ref_extensions=ref_extensions, kwargs...)
+    Memento.debug(_LOGGER, "pm model build time: $(time() - start_time)")
+
+    start_time = time()
+    result = optimize_model!(pm, relax_integrality=relax_integrality, optimizer=optimizer, solution_processors=solution_processors)
+    Memento.debug(_LOGGER, "pm model solve and solution time: $(time() - start_time)")
+
+    return pm, result
+end
 
 ""
 function instantiate_model(file::String, model_type::Type, build_method; kwargs...)

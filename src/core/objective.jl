@@ -1,4 +1,17 @@
 ""
+function objective_min_linear_cost(pm::AbstractPowerModel; kwargs...)
+    expression_pg_linear_cost(pm; kwargs...)
+    expression_p_dc_cost(pm; kwargs...)
+
+    return JuMP.@objective(pm.model, Min,
+        sum(
+            sum( var(pm, n,   :pg_cost, i) for (i,gen) in nw_ref[:gen]) +
+            sum( var(pm, n, :p_dc_cost, i) for (i,dcline) in nw_ref[:dcline])
+        for (n, nw_ref) in nws(pm))
+    )
+end
+
+""
 function objective_min_fuel_and_flow_cost(pm::AbstractPowerModel; kwargs...)
     expression_pg_cost(pm; kwargs...)
     expression_p_dc_cost(pm; kwargs...)
@@ -146,6 +159,40 @@ function expression_pg_cost(pm::AbstractPowerModel; report::Bool=true)
     end
 end
 
+"adds pg_cost variables and constraints in linear form"
+function expression_pg_linear_cost(pm::AbstractPowerModel; report::Bool=true)
+    for (n, nw_ref) in nws(pm)
+        pg_cost = var(pm, n)[:pg_cost] = Dict{Int,Any}()
+
+        for (i,gen) in ref(pm, n, :gen)
+            pg_terms = [var(pm, n, :pg, i)]
+
+            if gen["model"] == 1
+                if isa(pg_terms, Array{JuMP.VariableRef})
+                    pmin = sum(JuMP.lower_bound.(pg_terms))
+                    pmax = sum(JuMP.upper_bound.(pg_terms))
+                else
+                    pmin = gen["pmin"]
+                    pmax = gen["pmax"]
+                end
+
+                points = calc_pwl_points(gen["ncost"], gen["cost"], pmin, pmax)
+                pg_cost[i] = _pwl_cost_expression(pm, pg_terms, points, nw=n, id=i, var_name="pg")
+
+            elseif gen["model"] == 2
+                cost_rev = reverse(gen["cost"])
+
+                # pg_cost[i] = _polynomial_cost_expression(pm, pg_terms, cost_rev, nw=n, id=i, var_name="pg")
+                pg_cost[i] = _linear_cost_expression(pm, pg_terms, cost_rev, nw=n, id=i, var_name="pg")
+            else
+                Memento.error(_LOGGER, "Only cost models of types 1 and 2 are supported at this time, given cost model type of $(model) on generator $(i)")
+            end
+        end
+
+        report && sol_component_value(pm, n, :gen, :pg_cost, ids(pm, n, :gen), pg_cost)
+    end
+end
+
 
 "adds p_dc_cost variables and constraints"
 function expression_p_dc_cost(pm::AbstractPowerModel; report::Bool=true)
@@ -241,6 +288,25 @@ function _polynomial_cost_expression(pm::AbstractPowerModel, x_list::Array{JuMP.
 end
 
 # note that `cost_terms` should be providing in ascending order (the reverse of the Matpower spec.)
+function _linear_cost_expression(pm::AbstractPowerModel, x_list::Array{JuMP.VariableRef}, cost_terms; nw=0, id=1, var_name="x")
+    x = sum(x_list)
+    if length(cost_terms) == 0
+        return 0.0
+    elseif length(cost_terms) == 1
+        return cost_terms[1]
+    elseif length(cost_terms) == 2
+        return cost_terms[1] + cost_terms[2]*x
+    # elseif length(cost_terms) == 3
+    #     return cost_terms[1] + cost_terms[2]*x + cost_terms[3]*x^2
+    # else # length(cost_terms) >= 4
+    #     cost_nl = cost_terms[4:end]
+    #     return JuMP.@expression(pm.model, cost_terms[1] + cost_terms[2]*x + cost_terms[3]*x^2 + sum( v*x^(d+2) for (d,v) in enumerate(cost_nl)) )
+    else # length(cost_terms) >= 3
+        return cost_terms[1] + cost_terms[2]*x # ignore higher order terms of cost_terms
+    end
+end
+
+# note that `cost_terms` should be providing in ascending order (the reverse of the Matpower spec.)
 function _polynomial_cost_expression(pm::AbstractConicModels, x_list::Array{JuMP.VariableRef}, cost_terms; nw=0, id=1, var_name="x")
     x = sum(x_list)
     if length(cost_terms) == 0
@@ -293,7 +359,24 @@ function _polynomial_cost_expression(pm::AbstractPowerModel, x_list, cost_terms;
     end
 end
 
-
+# note that `cost_terms` should be providing in ascending order (the reverse of the Matpower spec.)
+function _linear_cost_expression(pm::AbstractPowerModel, x_list, cost_terms; nw=0, id=1, var_name="x")
+    x = JuMP.@expression(pm.model, sum(x for x in x_list))
+    if length(cost_terms) == 0
+        return 0.0
+    elseif length(cost_terms) == 1
+        return cost_terms[1]
+    elseif length(cost_terms) == 2
+        return JuMP.@expression(pm.model, cost_terms[1] + cost_terms[2]*x)
+    # elseif length(cost_terms) == 3
+    #     return JuMP.@expression(pm.model, cost_terms[1] + cost_terms[2]*x + cost_terms[3]*x^2)
+    # else # length(cost_terms) >= 4
+    #     cost_nl = cost_terms[4:end]
+    #     return JuMP.@expression(pm.model, cost_terms[1] + cost_terms[2]*x + cost_terms[3]*x^2 + sum( v*x^(d+2) for (d,v) in enumerate(cost_nl)) )
+    else # length(cost_terms) >= 3
+        return JuMP.@expression(pm.model, cost_terms[1] + cost_terms[2]*x)  # ignore higher order terms of cost_terms
+    end
+end
 
 
 

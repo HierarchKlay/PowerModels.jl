@@ -1090,6 +1090,15 @@ function calc_thermal_limits!(data::Dict{String,<:Any})
     apply_pm!(_calc_thermal_limits!, data)
 end
 
+"checks that each branch has a reasonable thermal rating-a, if not computes one with random perturbation"
+function calc_perturbed_thermal_limits!(data::Dict{String,<:Any})
+    pm_data = get_pm_data(data)
+
+    @assert("per_unit" in keys(pm_data) && pm_data["per_unit"])
+
+    apply_pm!(_calc_perturbed_thermal_limits!, data)
+end
+
 
 ""
 function _calc_thermal_limits!(pm_data::Dict{String,<:Any})
@@ -1134,6 +1143,54 @@ function _calc_thermal_limits!(pm_data::Dict{String,<:Any})
 
 end
 
+function _calc_perturbed_thermal_limits!(pm_data::Dict{String,<:Any}, portion::Float64=0.85)
+    mva_base = pm_data["baseMVA"]
+
+    branches = [branch for branch in values(pm_data["branch"])]
+
+    if haskey(pm_data, "ne_branch")
+        append!(branches, values(pm_data["ne_branch"]))
+    end
+
+    for branch in branches
+        if !haskey(branch, "rate_a")
+            branch["rate_a"] = 0.0
+        end
+
+        if branch["rate_a"] <= 0.0
+            theta_max = max(abs(branch["angmin"]), abs(branch["angmax"]))
+
+            r = branch["br_r"]
+            x = branch["br_x"]
+            z = r + im * x
+            y = pinv(z)
+            y_mag = abs.(y)
+
+            fr_vmax = pm_data["bus"][string(branch["f_bus"])]["vmax"]
+            to_vmax = pm_data["bus"][string(branch["t_bus"])]["vmax"]
+            m_vmax = max(fr_vmax, to_vmax)
+
+            c_max = sqrt(fr_vmax^2 + to_vmax^2 - 2*fr_vmax*to_vmax*cos(theta_max))
+
+            new_rate_base = y_mag * m_vmax * c_max
+
+            # 添加随机扰动 (85% ± 5%)
+            random_factor = portion + 0.1 * rand()  # 生成 0.85~0.95 的随机比例
+            new_rate_perturbed = new_rate_base * random_factor
+
+            # 考虑电流额定值约束 (若存在)
+            if haskey(branch, "c_rating_a") && branch["c_rating_a"] > 0.0
+                new_rate = min(new_rate_perturbed, branch["c_rating_a"] * m_vmax)
+            else
+                new_rate = new_rate_perturbed
+            end
+
+            # 输出日志 (显示最终设置的 rate_a)
+            Memento.warn(_LOGGER, "Applying random factor $(round(random_factor, digits=3)) to branch $(branch["index"]), new rate_a: $(round(mva_base*new_rate, digits=4))")
+            branch["rate_a"] = new_rate
+        end
+    end
+end
 
 
 "checks that each branch has non-negative current ratings and removes zero current ratings"

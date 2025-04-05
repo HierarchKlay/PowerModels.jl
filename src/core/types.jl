@@ -397,6 +397,10 @@ Applicable to problem formulations with `_bf` in the name.
 """
 mutable struct SOCBFPowerModel <: AbstractSOCBFModel @pm_fields end
 
+abstract type AbstractSOCDRBFModel <: AbstractSOCBFModel end
+
+mutable struct SOCDRBFPowerModel <: AbstractSOCDRBFModel @pm_fields end
+
 """
 Linear approximation of branch flow model.
 
