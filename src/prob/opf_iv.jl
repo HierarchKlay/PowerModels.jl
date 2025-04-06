@@ -11,7 +11,7 @@ function build_opf_iv(pm::AbstractPowerModel)
     variable_gen_current(pm)
     variable_dcline_current(pm)
 
-    objective_min_fuel_and_flow_cost(pm)
+    # objective_min_fuel_and_flow_cost(pm)
     objective_min_linear_cost(pm)
 
     for i in ids(pm, :ref_buses)
@@ -30,7 +30,7 @@ function build_opf_iv(pm::AbstractPowerModel)
         constraint_voltage_angle_difference(pm, i)
 
         constraint_thermal_limit_from(pm, i)
-        constraint_thermal_limit_to(pm, i)
+        # constraint_thermal_limit_to(pm, i)
     end
 
     for i in ids(pm, :dcline)

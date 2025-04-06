@@ -40,7 +40,7 @@ function build_opf(pm::AbstractPowerModel)
         constraint_voltage_angle_difference(pm, i)
 
         constraint_thermal_limit_from(pm, i)
-        constraint_thermal_limit_to(pm, i)
+        # constraint_thermal_limit_to(pm, i)
     end
 
     for i in ids(pm, :dcline)
