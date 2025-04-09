@@ -24,9 +24,29 @@ Recommended arguments:
     - 5: local outer approximation based on latest folded variables
 - `randseed` - random seed for the random number generator
 - `PwdRatio` - ratio of wind power to the total power
+- `Is_warm_start` - whether to use warm start
 """
-function solve_opf_bf_dr(file, model_type::Type{T}, optimizer; kwargs...) where T <: AbstractBFModel
-    pm, result = get_and_solve_model(file, model_type, optimizer, build_opf_bf_dr; kwargs...)
+function solve_opf_bf_dr(file, model_type::Type{T}, optimizer, is_warm_start=false, warm_start_model=nothing, warm_start_solver=nothing; kwargs...) where T <: AbstractBFModel
+
+    warm_res = Dict()
+    if is_warm_start
+        println("do warm start")
+        if warm_start_model === nothing
+            error("Warm start model is not provided.")
+        end
+        if warm_start_model === IVRPowerModel
+            println("Use IVRPowerModel as warm start model")
+            warm_res = solve_opf_iv(file, warm_start_model, warm_start_solver)
+        else
+            println("Use other model as warm start model")
+            warm_res = solve_opf(file, warm_start_model, warm_start_solver)
+        end
+    end
+    warm_res["is_warm_start"] = is_warm_start
+    warm_res["warm_start_model"] = warm_start_model
+    warm_res["warm_start_solver"] = warm_start_solver
+    pm, result = get_and_solve_model(file, model_type, optimizer, build_opf_bf_dr, warm_res; kwargs...)
+    # store the warm start model in the pm data
     return pm, result
 end
 
@@ -82,18 +102,25 @@ function build_opf_bf_dr(pm::AbstractPowerModel)
     randseed = haskey(param, "randseed") ? param["randseed"] : 0
     PwdRatio = haskey(param, "PwdRatio") ? param["PwdRatio"] : 0
 
+    param["K_init"] = K_init
+    param["K_max"] = K_max
+    param["constraints_flag"] = constraints_flag
+    param["outer_flag"] = outer_flag
+    param["randseed"] = randseed
+    param["PwdRatio"] = PwdRatio
+
     println("K_init: ", K_init, " K_max: ", K_max, " constraints_flag: ", constraints_flag,
-     " outer_flag: ", outer_flag, " randseed: ", randseed, " PwdRatio: ", PwdRatio)
+     "\nouter_flag: ", outer_flag, " randseed: ", randseed, " PwdRatio: ", PwdRatio)
+    
+    warm_res = ref(pm, :warm_res)
+    is_warm_start = warm_res["is_warm_start"]
+    warm_start_model = warm_res["warm_start_model"]
+    warm_start_solver = warm_res["warm_start_solver"]
+    println("is_warm_start: ", is_warm_start, " warm_start_model: ", warm_start_model, " warm_res: ", warm_res)
 
     # Set the model buspair_parameters
     model = pm.model
-    # JuMP.set_attribute(model, "Threads", 8)
-    JuMP.set_attribute(model, "Method", 2)
-    JuMP.set_attribute(model, "MIPGap", 1e-3)
-    # JuMP.set_attribute(model, "TimeLimit", 7200)
-    JuMP.set_attribute(model, "TimeLimit", 3600)      #temporary 
-    JuMP.set_attribute(model, "Seed",randseed)
-    # JuMP.set_attribute(model, "SolutionLimit",1)
+
 
     variable_bus_voltage(pm)
     variable_gen_power(pm)
@@ -138,6 +165,11 @@ function build_opf_bf_dr(pm::AbstractPowerModel)
     if constraints_flag == 4 || constraints_flag == 5
         callback_setup(pm, K_init, K_max, constraints_flag, outer_flag)
     end
+
+    if is_warm_start
+        assign_warm_start(pm, warm_res, warm_start_model)
+    end
+    
 end
 
 "Build multinetwork branch flow storage OPF"

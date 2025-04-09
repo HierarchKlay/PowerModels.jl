@@ -41,15 +41,15 @@ function solve_model(data::Dict{String,<:Any}, model_type::Type, optimizer, buil
 end
 
 "get the model and solve it simultaneously"
-function get_and_solve_model(file::String, model_type::Type, optimizer, build_method; kwargs...)
+function get_and_solve_model(file::String, model_type::Type, optimizer, build_method, warm_res; kwargs...)
     data = PowerModels.parse_file(file)
     calc_perturbed_thermal_limits!(data)
     # calc_thermal_limits!(data)
-    return get_and_solve_model(data, model_type, optimizer, build_method; kwargs...)
+    return get_and_solve_model(data, model_type, optimizer, build_method, warm_res; kwargs...)
 end
 
 ""
-function get_and_solve_model(data::Dict{String,<:Any}, model_type::Type, optimizer, build_method;
+function get_and_solve_model(data::Dict{String,<:Any}, model_type::Type, optimizer, build_method, warm_res;
         ref_extensions=[], solution_processors=[], relax_integrality=false,
         multinetwork=false, kwargs...)
 
@@ -65,10 +65,23 @@ function get_and_solve_model(data::Dict{String,<:Any}, model_type::Type, optimiz
         param[string(kw)] = val
     end
     data["param"] = param
+    data["warm_res"] = warm_res
     start_time = time()
     pm = instantiate_model(data, model_type, build_method; ref_extensions=ref_extensions)
     # pm = instantiate_model(data, model_type, build_method; ref_extensions=ref_extensions, kwargs...)
     Memento.debug(_LOGGER, "pm model build time: $(time() - start_time)")
+
+    # set the optimizer attributes
+    optimizer = optimizer_with_attributes(optimizer)
+    JuMP.set_optimizer_attributes(optimizer,
+        "Method" => 2,
+        "MIPGap" => 1e-3,
+        # "Threads" => 8,
+        "TimeLimit" => 3600,      #temporary
+        "Seed" => ref(pm, :param, "randseed"),
+        # "SolutionLimit" => 1,
+        # "FeasibilityTol" => 1e-4
+    )
 
     start_time = time()
     result = optimize_model!(pm, relax_integrality=relax_integrality, optimizer=optimizer, solution_processors=solution_processors)

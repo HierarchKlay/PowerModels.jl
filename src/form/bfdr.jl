@@ -1693,3 +1693,139 @@ function callback_function(cb_data, pm, isLazy, K_init, K, constraints_flag, out
         end
     end
 end
+
+function assign_warm_start(pm::AbstractSOCDRBFModel, warm_res, warm_start_model, n=nw_id_default)
+    model = pm.model
+
+    DEBUG = false
+    # DEBUG = true
+    ccm = var(pm, n, :ccm)
+    p = var(pm, n, :p)
+    q = var(pm, n, :q)
+    pg = var(pm, n, :pg)
+    qg = var(pm, n, :qg)
+    w = var(pm, n, :w)
+    
+    sol = warm_res["solution"]
+    if warm_start_model === IVRPowerModel
+        # set values for branch variables
+        for (i,branch) in ref(pm, n, :branch)
+            f_bus = branch["f_bus"]
+            t_bus = branch["t_bus"]
+            f_idx = (i, f_bus, t_bus)
+            t_idx = (i, t_bus, f_bus)
+            tm = branch["tap"]
+
+            # set values for ccm
+            val_ccm = sol["branch"][string(i)]["csr_fr"]^2 + sol["branch"][string(i)]["csi_fr"]^2
+            if i == 1
+                println("branch $i: ccm = $val_ccm")
+            end
+            JuMP.set_start_value(ccm[i], val_ccm)
+            if DEBUG
+               JuMP.fix(ccm[i], val_ccm, force=true) 
+            end
+
+            val_pf = sol["branch"][string(i)]["pf"]
+            val_qf = sol["branch"][string(i)]["qf"]
+            if i == 1
+                println("branch $i: pf = $val_pf, qf = $val_qf")
+            end
+            JuMP.set_start_value(p[f_idx], val_pf)
+            JuMP.set_start_value(q[f_idx], val_qf)
+            if DEBUG
+                JuMP.fix(p[f_idx], val_pf, force=true)
+                JuMP.fix(q[f_idx], val_qf, force=true)
+            end
+
+            # val_pt = sol["branch"][string(i)]["pt"]
+            # val_qt = sol["branch"][string(i)]["qt"]
+            # if i == 1
+            #     println("branch $i: pt = $val_pt, qt = $val_qt")
+            # end
+            # JuMP.set_start_value(p[t_idx], val_pt)
+            # JuMP.set_start_value(q[t_idx], val_qt)
+            # JuMP.fix(p[t_idx], val_pt, force=true)
+            # JuMP.fix(q[t_idx], val_qt, force=true)
+        end
+        # set values for gen variables
+        for (i,gen) in ref(pm, n, :gen)
+            val_pg = sol["gen"][string(i)]["pg"]
+            val_qg = sol["gen"][string(i)]["qg"]
+            JuMP.set_start_value(pg[i], val_pg)
+            JuMP.set_start_value(qg[i], val_qg)
+            if DEBUG
+                JuMP.fix(pg[i], val_pg, force=true)
+                JuMP.fix(qg[i], val_qg, force=true)
+            end
+        end
+        # set values for bus variables
+        for (i,bus) in ref(pm, n, :bus)
+            val_vr = sol["bus"][string(i)]["vr"]
+            val_vi = sol["bus"][string(i)]["vi"]
+            val_w = val_vr^2 + val_vi^2
+            JuMP.set_start_value(w[i], val_w)
+            if DEBUG
+                JuMP.fix(w[i], val_w, force=true)
+            end
+        end
+    elseif warm_start_model === ACPPowerModel
+        # set values for branch variables
+        for (i,branch) in ref(pm, n, :branch)
+            f_bus = branch["f_bus"]
+            t_bus = branch["t_bus"]
+            f_idx = (i, f_bus, t_bus)
+            t_idx = (i, t_bus, f_bus)
+            tm = branch["tap"]
+
+            # set values for power flow variables
+            val_pf = sol["branch"][string(i)]["pf"]
+            val_qf = sol["branch"][string(i)]["qf"]
+            if i == 1
+                println("branch $i: pf = $val_pf, qf = $val_qf")
+            end
+            JuMP.set_start_value(p[f_idx], val_pf)
+            JuMP.set_start_value(q[f_idx], val_qf)
+            if DEBUG
+                JuMP.fix(p[f_idx], val_pf, force=true)
+                JuMP.fix(q[f_idx], val_qf, force=true)
+            end
+
+            # calculate values of ccm
+            val_ccm = tm^2 * (val_pf^2 + val_qf^2) / sol["bus"][string(f_bus)]["vm"]^2
+            if i == 1
+                println("branch $i: ccm = $val_ccm")
+            end
+            JuMP.set_start_value(ccm[i], val_ccm)
+            if DEBUG
+                JuMP.fix(ccm[i], val_ccm, force=true)
+            end
+
+        end
+        # set values for gen variables
+        for (i,gen) in ref(pm, n, :gen)
+            val_pg = sol["gen"][string(i)]["pg"]
+            val_qg = sol["gen"][string(i)]["qg"]
+            JuMP.set_start_value(pg[i], val_pg)
+            JuMP.set_start_value(qg[i], val_qg)
+            if DEBUG
+                JuMP.fix(pg[i], val_pg, force=true)
+                JuMP.fix(qg[i], val_qg, force=true)
+            end
+        end
+        # set values for bus variables
+        for (i,bus) in ref(pm, n, :bus)
+            val_vm = sol["bus"][string(i)]["vm"]
+            
+            val_w = val_vm^2
+            JuMP.set_start_value(w[i], val_w)
+            if DEBUG
+                JuMP.fix(w[i], val_w, force=true)
+            end
+        end
+    else
+        #TODO: add warm start for other models
+    end
+
+    
+end
