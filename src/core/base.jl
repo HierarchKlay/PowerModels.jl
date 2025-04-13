@@ -33,6 +33,16 @@ function solve_model(data::Dict{String,<:Any}, model_type::Type, optimizer, buil
     pm = instantiate_model(data, model_type, build_method; ref_extensions=ref_extensions, kwargs...)
     Memento.debug(_LOGGER, "pm model build time: $(time() - start_time)")
 
+    # stress numerical stability of the warm start model
+    eps = 1e-15
+    optimizer = optimizer_with_attributes(optimizer)
+    set_optimizer_attribute(optimizer, "tol", eps) 
+    set_optimizer_attribute(optimizer, "constr_viol_tol", eps) 
+    set_optimizer_attribute(optimizer, "dual_inf_tol", eps)
+    set_optimizer_attribute(optimizer, "compl_inf_tol", eps)
+    set_optimizer_attribute(optimizer, "acceptable_tol", eps)
+    set_optimizer_attribute(optimizer, "acceptable_constr_viol_tol", eps)    
+
     start_time = time()
     result = optimize_model!(pm, relax_integrality=relax_integrality, optimizer=optimizer, solution_processors=solution_processors)
     Memento.debug(_LOGGER, "pm model solve and solution time: $(time() - start_time)")
@@ -66,11 +76,6 @@ function get_and_solve_model(data::Dict{String,<:Any}, model_type::Type, optimiz
     end
     data["param"] = param
     data["warm_res"] = warm_res
-    start_time = time()
-    pm = instantiate_model(data, model_type, build_method; ref_extensions=ref_extensions)
-    # pm = instantiate_model(data, model_type, build_method; ref_extensions=ref_extensions, kwargs...)
-    Memento.debug(_LOGGER, "pm model build time: $(time() - start_time)")
-
     # set the optimizer attributes
     optimizer = optimizer_with_attributes(optimizer)
     JuMP.set_optimizer_attributes(optimizer,
@@ -78,10 +83,15 @@ function get_and_solve_model(data::Dict{String,<:Any}, model_type::Type, optimiz
         "MIPGap" => 1e-3,
         # "Threads" => 8,
         "TimeLimit" => 3600,      #temporary
-        "Seed" => ref(pm, :param, "randseed"),
+        "Seed" => get(param, "randseed", 0),
         # "SolutionLimit" => 1,
         # "FeasibilityTol" => 1e-4
     )
+    data["optimizer"] = optimizer
+    start_time = time()
+    pm = instantiate_model(data, model_type, build_method; ref_extensions=ref_extensions)
+    # pm = instantiate_model(data, model_type, build_method; ref_extensions=ref_extensions, kwargs...)
+    Memento.debug(_LOGGER, "pm model build time: $(time() - start_time)")
 
     start_time = time()
     result = optimize_model!(pm, relax_integrality=relax_integrality, optimizer=optimizer, solution_processors=solution_processors)

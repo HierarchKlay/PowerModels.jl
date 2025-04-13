@@ -94,6 +94,7 @@ end
 "dr methods of the bf model"
 function build_opf_bf_dr(pm::AbstractPowerModel)
     param = ref(pm, :param)
+    model = pm.model
     
     K_init = haskey(param, "K_init") ? param["K_init"] : 0
     K_max = haskey(param, "K_max") ? param["K_max"] : 4
@@ -116,11 +117,7 @@ function build_opf_bf_dr(pm::AbstractPowerModel)
     is_warm_start = warm_res["is_warm_start"]
     warm_start_model = warm_res["warm_start_model"]
     warm_start_solver = warm_res["warm_start_solver"]
-    println("is_warm_start: ", is_warm_start, " warm_start_model: ", warm_start_model, " warm_res: ", warm_res)
-
-    # Set the model buspair_parameters
-    model = pm.model
-
+    println("is_warm_start: ", is_warm_start, " warm_start_model: ", warm_start_model)
 
     variable_bus_voltage(pm)
     variable_gen_power(pm)
@@ -165,6 +162,9 @@ function build_opf_bf_dr(pm::AbstractPowerModel)
     if constraints_flag == 4 || constraints_flag == 5
         callback_setup(pm, K_init, K_max, constraints_flag, outer_flag)
     end
+
+    # Unset warm start of all variables to avoid conflicts
+    init_variables(pm)
 
     if is_warm_start
         assign_warm_start(pm, warm_res, warm_start_model)

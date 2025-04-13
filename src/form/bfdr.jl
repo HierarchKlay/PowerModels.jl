@@ -204,7 +204,7 @@ end
 "define (pre-added) rotation and fold constraints for R&F"
 function constraint_rotation_and_fold(pm::AbstractSOCDRBFModel, K_init, K_max, constraints_flag, n::Int = nw_id_default, report::Bool = true)
     # check missing keys
-    # _check_missing_keys(var(pm, nw), [:p,:q,:w,:ccm], typeof(pm))
+    # _check_missing_keys(var(pm, n), [:p,:q,:w,:ccm], typeof(pm))
     p = var(pm, n, :p); q = var(pm, n, :q); w = var(pm, n, :w); ccm = var(pm, n, :ccm); s = var(pm, n, :s); vpi = var(pm, n, :vpi); vmi = var(pm, n, :vmi)
 
     pp = var(pm, n, :pp); pn = var(pm, n, :pn); flag_p = var(pm, n, :flag_p)
@@ -378,7 +378,7 @@ function callback_setup(pm::AbstractSOCDRBFModel, K_init, K, constraints_flag, o
     nCuts = pm.model[:nCuts] = [0]
     nOAIters = pm.model[:nOAIters] = [0]
     num_bra = length(ref(pm, n, :branch))
-    println("num_bra = ", num_bra)
+
     if K_init == 0-1
         count_rf = pm.model[:count_rf] = fill(K_init+1, num_bra, 2)     # max num of r&f for each conic surface constraints till now
     else
@@ -1696,82 +1696,308 @@ end
 
 function assign_warm_start(pm::AbstractSOCDRBFModel, warm_res, warm_start_model, n=nw_id_default)
     model = pm.model
+    param = ref(pm, :param)
+    sol = warm_res["solution"]
 
-    DEBUG = false
-    # DEBUG = true
-    ccm = var(pm, n, :ccm)
-    p = var(pm, n, :p)
-    q = var(pm, n, :q)
+    violation_check(pm, sol)
+    fea_sol = solution_adjustment(pm, sol, warm_start_model)
+
+    # assign warm start values
+    for var in all_variables(model)
+        varname = name(var)
+        if haskey(fea_sol, varname)
+            set_start_value(var, fea_sol[varname])
+        end
+    end
+
+    return
+end
+
+function init_variables(pm, n=nw_id_default)
+    w = var(pm, n, :w)
+    for i in ids(pm, n, :bus)
+        JuMP.set_start_value(w[i], nothing)
+    end
+
     pg = var(pm, n, :pg)
     qg = var(pm, n, :qg)
-    w = var(pm, n, :w)
+    for i in ids(pm, n, :gen)
+        JuMP.set_start_value(pg[i], nothing)
+        JuMP.set_start_value(qg[i], nothing)
+    end
     
-    sol = warm_res["solution"]
-    if warm_start_model === IVRPowerModel
-        # set values for branch variables
-        for (i,branch) in ref(pm, n, :branch)
+    p = var(pm, n, :p)
+    q = var(pm, n, :q)
+    for i in ref(pm, n, :arcs)
+        JuMP.set_start_value(p[i], nothing)
+        JuMP.set_start_value(q[i], nothing)
+    end
+
+    ccm = var(pm, n, :ccm)
+    for i in ids(pm, n, :branch)
+        JuMP.set_start_value(ccm[i], nothing)
+    end
+end
+
+function violation_check(pm, sol, nw=nw_id_default)
+    warm_start_model = ref(pm, :warm_res)["warm_start_model"]
+    if warm_start_model == IVRPowerModel
+        # get solution from sol
+        p = Dict(); q = Dict(); pg = Dict(); qg = Dict(); w = Dict(); ccm = Dict()
+        for (i, bus) in ref(pm, nw, :bus)
+            val_vr = sol["bus"][string(i)]["vr"]
+            val_vi = sol["bus"][string(i)]["vi"]
+            w[i] = val_vr^2 + val_vi^2
+        end
+        for (i, branch) in ref(pm, nw, :branch)
             f_bus = branch["f_bus"]
             t_bus = branch["t_bus"]
             f_idx = (i, f_bus, t_bus)
             t_idx = (i, t_bus, f_bus)
             tm = branch["tap"]
 
-            # set values for ccm
-            val_ccm = sol["branch"][string(i)]["csr_fr"]^2 + sol["branch"][string(i)]["csi_fr"]^2
-            if i == 1
-                println("branch $i: ccm = $val_ccm")
-            end
-            JuMP.set_start_value(ccm[i], val_ccm)
-            if DEBUG
-               JuMP.fix(ccm[i], val_ccm, force=true) 
-            end
-
-            val_pf = sol["branch"][string(i)]["pf"]
-            val_qf = sol["branch"][string(i)]["qf"]
-            if i == 1
-                println("branch $i: pf = $val_pf, qf = $val_qf")
-            end
-            JuMP.set_start_value(p[f_idx], val_pf)
-            JuMP.set_start_value(q[f_idx], val_qf)
-            if DEBUG
-                JuMP.fix(p[f_idx], val_pf, force=true)
-                JuMP.fix(q[f_idx], val_qf, force=true)
-            end
-
-            # val_pt = sol["branch"][string(i)]["pt"]
-            # val_qt = sol["branch"][string(i)]["qt"]
-            # if i == 1
-            #     println("branch $i: pt = $val_pt, qt = $val_qt")
-            # end
-            # JuMP.set_start_value(p[t_idx], val_pt)
-            # JuMP.set_start_value(q[t_idx], val_qt)
-            # JuMP.fix(p[t_idx], val_pt, force=true)
-            # JuMP.fix(q[t_idx], val_qt, force=true)
+            p[f_idx] = sol["branch"][string(i)]["pf"]
+            q[f_idx] = sol["branch"][string(i)]["qf"]
+            p[t_idx] = sol["branch"][string(i)]["pt"]
+            q[t_idx] = sol["branch"][string(i)]["qt"]
+            ccm[i] = sol["branch"][string(i)]["csr_fr"]^2 + sol["branch"][string(i)]["csi_fr"]^2
         end
-        # set values for gen variables
-        for (i,gen) in ref(pm, n, :gen)
-            val_pg = sol["gen"][string(i)]["pg"]
-            val_qg = sol["gen"][string(i)]["qg"]
-            JuMP.set_start_value(pg[i], val_pg)
-            JuMP.set_start_value(qg[i], val_qg)
-            if DEBUG
-                JuMP.fix(pg[i], val_pg, force=true)
-                JuMP.fix(qg[i], val_qg, force=true)
+        for (i, gen) in ref(pm, nw, :gen)
+            pg[i] = sol["gen"][string(i)]["pg"]
+            qg[i] = sol["gen"][string(i)]["qg"]
+        end
+
+        # check power balance constraints
+        vio_bal = Dict(
+            "p" => Dict(),
+            "q" => Dict(),
+        )
+        for i in ids(pm, :bus)
+            bus = ref(pm, nw, :bus, i)
+            bus_arcs = ref(pm, nw, :bus_arcs, i)
+            bus_gens = ref(pm, nw, :bus_gens, i)
+            bus_loads = ref(pm, nw, :bus_loads, i)
+            bus_shunts = ref(pm, nw, :bus_shunts, i)
+            bus_pd = Dict(k => ref(pm, nw, :load, k, "pd") for k in bus_loads)
+            bus_qd = Dict(k => ref(pm, nw, :load, k, "qd") for k in bus_loads)
+
+            bus_gs = Dict(k => ref(pm, nw, :shunt, k, "gs") for k in bus_shunts)
+            bus_bs = Dict(k => ref(pm, nw, :shunt, k, "bs") for k in bus_shunts)
+            
+            vio_p = (sum(p[a] for a in bus_arcs; init=0.0) - sum(pg[g] for g in bus_gens; init=0.0) 
+            + sum(pd for pd in values(bus_pd); init=0.0) + sum(gs for gs in values(bus_gs); init=0.0)*w[i])
+            vio_bal["p"][i] = vio_p
+            vio_q = (sum(q[a] for a in bus_arcs; init=0.0) - sum(qg[g] for g in bus_gens; init=0.0)
+            + sum(qd for qd in values(bus_qd); init=0.0) - sum(bs for bs in values(bus_bs); init=0.0)*w[i])
+            vio_bal["q"][i] = vio_q
+        end
+
+        # check power loss constraints
+        vio_powloss = Dict(
+            "p" => Dict(),
+            "q" => Dict(),
+        )
+        for i in ids(pm, :branch)
+            branch = ref(pm, nw, :branch, i)
+            f_bus = branch["f_bus"]
+            t_bus = branch["t_bus"]
+            f_idx = (i, f_bus, t_bus)
+            t_idx = (i, t_bus, f_bus)
+            tm = branch["tap"]
+
+            r = branch["br_r"]
+            x = branch["br_x"]
+            tm = branch["tap"]
+            g_sh_fr = branch["g_fr"]
+            g_sh_to = branch["g_to"]
+            b_sh_fr = branch["b_fr"]
+            b_sh_to = branch["b_to"]
+
+            ym_sh_sqr = g_sh_fr^2 + b_sh_fr^2
+
+            p_fr = p[f_idx]; q_fr = q[f_idx]; p_to = p[t_idx]; q_to = q[t_idx]; w_fr = w[f_bus]; w_to = w[t_bus]; ccmv = ccm[i]
+            vio_p = (p_fr + p_to -(r*(ccmv + ym_sh_sqr*(w_fr/tm^2) - 2*(g_sh_fr*p_fr - b_sh_fr*q_fr)) + g_sh_fr*(w_fr/tm^2) + g_sh_to*w_to))
+            # push!(vio_powloss["p"], vio_p)
+            vio_powloss["p"][i] = vio_p
+            vio_q = (q_fr + q_to -(x*(ccmv + ym_sh_sqr*(w_fr/tm^2) - 2*(g_sh_fr*p_fr - b_sh_fr*q_fr)) - b_sh_fr*(w_fr/tm^2) - b_sh_to*w_to))
+            # push!(vio_powloss["q"], vio_q)
+            vio_powloss["q"][i] = vio_q
+        end
+
+        # check voltage magnitude difference constraints
+        vio_volmagdiff = Dict()
+        for i in ids(pm, :branch)
+            branch = ref(pm, nw, :branch, i)
+            f_bus = branch["f_bus"]
+            t_bus = branch["t_bus"]
+            f_idx = (i, f_bus, t_bus)
+            t_idx = (i, t_bus, f_bus)
+            tm = branch["tap"]
+
+            r = branch["br_r"]
+            x = branch["br_x"]
+            g_sh_fr = branch["g_fr"]
+            b_sh_fr = branch["b_fr"]
+            
+            p_fr = p[f_idx]; q_fr = q[f_idx]; w_fr = w[f_bus]; w_to = w[t_bus]; ccmv = ccm[i]
+            ym_sh_sqr = g_sh_fr^2 + b_sh_fr^2
+
+            vio = ((1+2*(r*g_sh_fr - x*b_sh_fr))*(w_fr/tm^2) - w_to - (2*(r*p_fr + x*q_fr) - (r^2 + x^2)*(ccmv + ym_sh_sqr*(w_fr/tm^2) - 2*(g_sh_fr*p_fr - b_sh_fr*q_fr))))
+            # push!(vio_volmagdiff, vio)
+            vio_volmagdiff[i] = vio
+        end
+
+        # check voltage angle difference constraints
+        vio_volangdiff = Dict(
+            "min" => Dict(),
+            "max" => Dict(),
+        )
+        for i in ids(pm, :branch)
+            branch = ref(pm, nw, :branch, i)
+            f_bus = branch["f_bus"]
+            t_bus = branch["t_bus"]
+            f_idx = (i, f_bus, t_bus)
+            t_idx = (i, t_bus, f_bus)
+            tm = branch["tap"]
+            pair = (f_bus, t_bus)
+            buspair = ref(pm, nw, :buspairs, pair)
+
+            if buspair["branch"] == i
+                g_fr = branch["g_fr"]
+                g_to = branch["g_to"]
+                b_fr = branch["b_fr"]
+                b_to = branch["b_to"]
+
+                tr, ti = calc_branch_t(branch)
+
+                r = branch["br_r"]
+                x = branch["br_x"]
+                angmin = buspair["angmin"]
+                angmax = buspair["angmax"]
+
+                p_fr = p[f_idx]; q_fr = q[f_idx]; w_fr = w[f_bus]; w_to = w[t_bus]; ccmv = ccm[i]
+                tzr = r*tr + x*ti
+                tzi = r*ti - x*tr
+
+                vio_min =(tan(angmin)*((tr + tzr*g_fr + tzi*b_fr)*(w_fr/tm^2) - tzr*p_fr + tzi*q_fr)
+                - ((ti + tzi*g_fr - tzr*b_fr)*(w_fr/tm^2) - tzi*p_fr - tzr*q_fr))
+                # push!(vio_volangdiff["min"], vio_min)
+                vio_volangdiff["min"][i] = vio_min
+                vio_max =(tan(angmax)*((tr + tzr*g_fr + tzi*b_fr)*(w_fr/tm^2) - tzr*p_fr + tzi*q_fr)
+                - ((ti + tzi*g_fr - tzr*b_fr)*(w_fr/tm^2) - tzi*p_fr - tzr*q_fr))
+                # push!(vio_volangdiff["max"], vio_max)
+                vio_volangdiff["max"][i] = vio_max
+
             end
         end
-        # set values for bus variables
-        for (i,bus) in ref(pm, n, :bus)
+
+        violation = Dict(
+            "power_balance" => vio_bal,
+            "power_loss" => vio_powloss,
+            "voltage_magnitude_difference" => vio_volmagdiff,
+            "voltage_angle_difference" => vio_volangdiff,
+        )
+        pm.model[:violation] = violation
+    else
+        #TODO: add violation check for other models
+    end
+end
+
+function solution_adjustment(pm, sol, warm_start_model, nw=nw_id_default)
+    param = ref(pm, :param)
+    K_init = haskey(param, "K_init") ? param["K_init"] : 0
+    K_max = haskey(param, "K_max") ? param["K_max"] : 4
+    constraints_flag = haskey(param, "constraints_flag") ? param["constraints_flag"] : 4
+    outer_flag = haskey(param, "outer_flag") ? param["outer_flag"] : 5
+    randseed = haskey(param, "randseed") ? param["randseed"] : 0
+    PwdRatio = haskey(param, "PwdRatio") ? param["PwdRatio"] : 0
+
+    model = pm.model
+    optimizer = ref(pm, :optimizer)
+
+    pm_copy = deepcopy(pm)
+    aux_model = pm_copy.model
+    set_optimizer(aux_model, optimizer)
+    MOI.Utilities.attach_optimizer(aux_model)
+
+    # aux_model = copy(model)
+    # JuMP.set_optimizer(aux_model, optimizer)
+    # for k in keys(model.ext)
+    #     println("keys:", k)
+    # end
+    # println("model=", typeof(model))
+    # aux_model = Model(optimizer)
+    # MOI.copy_to(aux_model, backend(model))
+    # focus on the numerical issues
+    JuMP.set_attribute(aux_model, "FeasibilityTol", 1e-6)
+    JuMP.set_attribute(aux_model, "NumericFocus", 3)
+    # We allow some numerical deviation in the solution
+    # JuMP.set_attribute(aux_model, "MIPGap", 0.01)
+    
+    # get variable references in aux_model
+    ccm = Dict()
+    for i in ids(pm, nw, :branch)
+        ccm[i] = JuMP.variable_by_name(aux_model, "$(nw)_ccm[$(i)]")
+    end
+    p = Dict(); q = Dict()
+    for idx in ref(pm, nw, :arcs)
+        p[idx] = JuMP.variable_by_name(aux_model, "$(nw)_p[$(idx)]")
+        q[idx] = JuMP.variable_by_name(aux_model, "$(nw)_q[$(idx)]")
+    end
+    s = Dict()
+    for idx in ref(pm, nw, :arcs)
+        s[idx] = JuMP.variable_by_name(aux_model, "$(nw)_s[$(idx)]")
+    end
+    pg = Dict(); qg = Dict()
+    for i in ids(pm, nw, :gen)
+        pg[i] = JuMP.variable_by_name(aux_model, "$(nw)_pg[$(i)]")
+        qg[i] = JuMP.variable_by_name(aux_model, "$(nw)_qg[$(i)]")
+    end
+    w = Dict()
+    for i in ids(pm, nw, :bus)
+        w[i] = JuMP.variable_by_name(aux_model, "$(nw)_w[$(i)]")
+    end
+
+    # get solution from sol and change the objective
+    if warm_start_model === IVRPowerModel    
+        val_ccm = Dict()
+        for (i,branch) in ref(pm, nw, :branch)
+            f_bus = branch["f_bus"]
+            t_bus = branch["t_bus"]
+            f_idx = (i, f_bus, t_bus)
+            t_idx = (i, t_bus, f_bus)
+            tm = branch["tap"]
+
+            val_ccm[i] = sol["branch"][string(i)]["csr_fr"]^2 + sol["branch"][string(i)]["csi_fr"]^2 
+        end
+        val_p = Dict(); val_q = Dict(); val_s = Dict()
+        for (i,branch) in ref(pm, nw, :branch)
+            f_bus = branch["f_bus"]
+            t_bus = branch["t_bus"]
+            f_idx = (i, f_bus, t_bus)
+            t_idx = (i, t_bus, f_bus)
+
+            val_p[f_idx] = sol["branch"][string(i)]["pf"]
+            val_q[f_idx] = sol["branch"][string(i)]["qf"]
+            val_p[t_idx] = sol["branch"][string(i)]["pt"]
+            val_q[t_idx] = sol["branch"][string(i)]["qt"]
+            val_s[f_idx] = sqrt(val_p[f_idx]^2 + val_q[f_idx]^2)
+            val_s[t_idx] = sqrt(val_p[t_idx]^2 + val_q[t_idx]^2)
+        end
+        val_pg = Dict(); val_qg = Dict()
+        for (i,gen) in ref(pm, nw, :gen)
+            val_pg[i] = sol["gen"][string(i)]["pg"]
+            val_qg[i] = sol["gen"][string(i)]["qg"]
+        end
+        val_w = Dict()
+        for (i,bus) in ref(pm, nw, :bus)
             val_vr = sol["bus"][string(i)]["vr"]
             val_vi = sol["bus"][string(i)]["vi"]
-            val_w = val_vr^2 + val_vi^2
-            JuMP.set_start_value(w[i], val_w)
-            if DEBUG
-                JuMP.fix(w[i], val_w, force=true)
-            end
+            val_w[i] = val_vr^2 + val_vi^2
         end
     elseif warm_start_model === ACPPowerModel
-        # set values for branch variables
-        for (i,branch) in ref(pm, n, :branch)
+        val_ccm = Dict(); val_p = Dict(); val_q = Dict(); val_s = Dict()
+        for (i,branch) in ref(pm, nw, :branch)
             f_bus = branch["f_bus"]
             t_bus = branch["t_bus"]
             f_idx = (i, f_bus, t_bus)
@@ -1779,53 +2005,157 @@ function assign_warm_start(pm::AbstractSOCDRBFModel, warm_res, warm_start_model,
             tm = branch["tap"]
 
             # set values for power flow variables
-            val_pf = sol["branch"][string(i)]["pf"]
-            val_qf = sol["branch"][string(i)]["qf"]
-            if i == 1
-                println("branch $i: pf = $val_pf, qf = $val_qf")
-            end
-            JuMP.set_start_value(p[f_idx], val_pf)
-            JuMP.set_start_value(q[f_idx], val_qf)
-            if DEBUG
-                JuMP.fix(p[f_idx], val_pf, force=true)
-                JuMP.fix(q[f_idx], val_qf, force=true)
-            end
-
+            val_p[f_idx] = sol["branch"][string(i)]["pf"]
+            val_q[f_idx] = sol["branch"][string(i)]["qf"]
+            val_p[t_idx] = sol["branch"][string(i)]["pt"]
+            val_q[t_idx] = sol["branch"][string(i)]["qt"]
+            val_s[f_idx] = sqrt(val_p[f_idx]^2 + val_q[f_idx]^2)
+            val_s[t_idx] = sqrt(val_p[t_idx]^2 + val_q[t_idx]^2)
             # calculate values of ccm
-            val_ccm = tm^2 * (val_pf^2 + val_qf^2) / sol["bus"][string(f_bus)]["vm"]^2
-            if i == 1
-                println("branch $i: ccm = $val_ccm")
-            end
-            JuMP.set_start_value(ccm[i], val_ccm)
-            if DEBUG
-                JuMP.fix(ccm[i], val_ccm, force=true)
-            end
-
+            val_ccm[i] = tm^2 * (val_p[f_idx]^2 + val_q[f_idx]^2) / sol["bus"][string(f_bus)]["vm"]^2
         end
-        # set values for gen variables
-        for (i,gen) in ref(pm, n, :gen)
-            val_pg = sol["gen"][string(i)]["pg"]
-            val_qg = sol["gen"][string(i)]["qg"]
-            JuMP.set_start_value(pg[i], val_pg)
-            JuMP.set_start_value(qg[i], val_qg)
-            if DEBUG
-                JuMP.fix(pg[i], val_pg, force=true)
-                JuMP.fix(qg[i], val_qg, force=true)
-            end
+        val_pg = Dict(); val_qg = Dict()
+        for (i,gen) in ref(pm, nw, :gen)
+            val_pg[i] = sol["gen"][string(i)]["pg"]
+            val_qg[i] = sol["gen"][string(i)]["qg"]
         end
-        # set values for bus variables
-        for (i,bus) in ref(pm, n, :bus)
+        val_w = Dict()
+        for (i,bus) in ref(pm, nw, :bus)
             val_vm = sol["bus"][string(i)]["vm"]
-            
-            val_w = val_vm^2
-            JuMP.set_start_value(w[i], val_w)
-            if DEBUG
-                JuMP.fix(w[i], val_w, force=true)
-            end
+            val_w[i] = val_vm^2
         end
     else
-        #TODO: add warm start for other models
+        #TODO: get solutions from other models
     end
 
-    
+    # set start value for the variables
+    for i in ids(pm, nw, :branch)
+        if !isnothing(ccm[i]) && haskey(val_ccm, i)
+            set_start_value(ccm[i], val_ccm[i])
+        end
+    end
+
+    for idx in ref(pm, nw, :arcs)
+        if !isnothing(p[idx]) && haskey(val_p, idx)
+            set_start_value(p[idx], val_p[idx])
+        end
+        if !isnothing(q[idx]) && haskey(val_q, idx)
+            set_start_value(q[idx], val_q[idx])
+        end
+        if !isnothing(s[idx]) && haskey(val_s, idx)
+            set_start_value(s[idx], val_s[idx])
+        end
+    end
+
+    for i in ids(pm, nw, :gen)
+        if !isnothing(pg[i]) && haskey(val_pg, i)
+            set_start_value(pg[i], val_pg[i])
+        end
+        if !isnothing(qg[i]) && haskey(val_qg, i)
+            set_start_value(qg[i], val_qg[i])
+        end
+    end
+
+    for i in ids(pm, nw, :bus)
+        if !isnothing(w[i]) && haskey(val_w, i)
+            set_start_value(w[i], val_w[i])
+        end
+    end
+
+    # optional quadratic objective
+    # JuMP.@objective(
+    #     aux_model, Min,
+    #     sum(
+    #         (ccm[i] - val_ccm[i])^2 for i in ids(pm, nw, :branch)
+    #     ) +
+    #     sum(
+    #         (p[idx] - val_p[idx])^2 + (q[idx] - val_q[idx])^2 + (s[idx] - val_s[idx])^2 for idx in ref(pm, nw, :arcs)
+    #     ) +
+    #     sum(
+    #         (pg[i] - val_pg[i])^2 + (qg[i] - val_qg[i])^2 for i in ids(pm, nw, :gen)
+    #     ) +
+    #     sum(
+    #         (w[i] - val_w[i])^2 for i in ids(pm, nw, :bus)
+    #     )
+    # )
+
+    # auxiliary variables for absolute value
+    @variable(aux_model, z_ccm[i in ids(pm, nw, :branch)] >= 0)
+    @variable(aux_model, z_arc[idx in ref(pm, nw, :arcs), t=1:3] >= 0)  # t=1: p, 2: q, 3: s
+    @variable(aux_model, z_gen[i in ids(pm, nw, :gen), t=1:2] >= 0)     # t=1: pg, 2: qg
+    @variable(aux_model, z_w[i in ids(pm, nw, :bus)] >= 0)
+
+    # absolute value constraints
+    @constraint(aux_model, [i in ids(pm, nw, :branch)], 
+    z_ccm[i] >= ccm[i] - val_ccm[i])
+    @constraint(aux_model, [i in ids(pm, nw, :branch)], 
+    z_ccm[i] >= -(ccm[i] - val_ccm[i]))
+
+    @constraint(aux_model, [idx in ref(pm, nw, :arcs)],
+    z_arc[idx, 1] >= p[idx] - val_p[idx])
+    @constraint(aux_model, [idx in ref(pm, nw, :arcs)],
+    z_arc[idx, 1] >= -(p[idx] - val_p[idx]))
+    @constraint(aux_model, [idx in ref(pm, nw, :arcs)],
+    z_arc[idx, 2] >= q[idx] - val_q[idx])
+    @constraint(aux_model, [idx in ref(pm, nw, :arcs)],
+    z_arc[idx, 2] >= -(q[idx] - val_q[idx]))
+    @constraint(aux_model, [idx in ref(pm, nw, :arcs)],
+    z_arc[idx, 3] >= s[idx] - val_s[idx])
+    @constraint(aux_model, [idx in ref(pm, nw, :arcs)],
+    z_arc[idx, 3] >= -(s[idx] - val_s[idx]))
+
+    @constraint(aux_model, [i in ids(pm, nw, :gen)],
+    z_gen[i, 1] >= pg[i] - val_pg[i])
+    @constraint(aux_model, [i in ids(pm, nw, :gen)],
+    z_gen[i, 1] >= -(pg[i] - val_pg[i]))
+    @constraint(aux_model, [i in ids(pm, nw, :gen)],
+    z_gen[i, 2] >= qg[i] - val_qg[i])
+    @constraint(aux_model, [i in ids(pm, nw, :gen)],
+    z_gen[i, 2] >= -(qg[i] - val_qg[i]))
+
+    @constraint(aux_model, [i in ids(pm, nw, :bus)],
+    z_w[i] >= w[i] - val_w[i])
+    @constraint(aux_model, [i in ids(pm, nw, :bus)],
+    z_w[i] >= -(w[i] - val_w[i]))
+
+    # final objective: minimize the sum of absolute values
+    @objective(aux_model, Min,
+    sum(z_ccm[i] for i in ids(pm, nw, :branch)) +
+    sum(z_arc[idx, t] for idx in ref(pm, nw, :arcs), t in 1:3) +
+    sum(z_gen[i, t] for i in ids(pm, nw, :gen), t in 1:2) +
+    sum(z_w[i] for i in ids(pm, nw, :bus))
+    )
+
+    # setup callback function for aux_model
+    if constraints_flag == 4 || constraints_flag == 5
+        # callback_setup(pm_copy, K_init, K_max, constraints_flag, outer_flag)
+        # turn off callback for numerical correction
+        MOI.set(aux_model, MOI.LazyConstraintCallback(), nothing)
+
+        # force the model to be solved with all constraints
+        if constraints_flag == 4
+            static_conss_flag = 3
+        else
+            static_conss_flag = 6
+        end
+        constraint_rotation_and_fold(pm_copy, K_init, K_max, static_conss_flag)
+    end
+
+
+    println("Searching for feasible solution...")
+    JuMP.optimize!(aux_model)
+
+    println("Objective value of aux_model: ", JuMP.objective_value(aux_model))
+    if JuMP.termination_status(aux_model) == MOI.OPTIMAL
+        # get solution from aux_model
+        aux_solution = Dict()
+        for var in all_variables(aux_model)
+            aux_solution[name(var)] = value(var)
+        end
+
+        return aux_solution
+    else
+        println("No feasible solution found.")
+        return nothing
+    end
 end
