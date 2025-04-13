@@ -1700,17 +1700,118 @@ function assign_warm_start(pm::AbstractSOCDRBFModel, warm_res, warm_start_model,
     sol = warm_res["solution"]
 
     violation_check(pm, sol)
-    fea_sol = solution_adjustment(pm, sol, warm_start_model)
 
-    # assign warm start values
-    for var in all_variables(model)
-        varname = name(var)
-        if haskey(fea_sol, varname)
-            set_start_value(var, fea_sol[varname])
+    constraints_flag = haskey(param, "constraints_flag") ? param["constraints_flag"] : 4
+
+    if constraints_flag != 0
+        fea_sol = solution_adjustment(pm, sol, warm_start_model)
+
+        # assign warm start values
+        for var in all_variables(model)
+            varname = name(var)
+            if haskey(fea_sol, varname)
+                set_start_value(var, fea_sol[varname])
+            end
         end
+
+        return
     end
 
-    return
+    # assign warm start values when constraints_flag == 0 (linear approximation)
+    ccm = var(pm, n, :ccm)
+    p = var(pm, n, :p)
+    q = var(pm, n, :q)
+    pg = var(pm, n, :pg)
+    qg = var(pm, n, :qg)
+    w = var(pm, n, :w)
+    s = var(pm, n, :s)
+
+    if warm_start_model === IVRPowerModel
+        # set values for branch variables
+        for (i,branch) in ref(pm, n, :branch)
+            f_bus = branch["f_bus"]
+            t_bus = branch["t_bus"]
+            f_idx = (i, f_bus, t_bus)
+            t_idx = (i, t_bus, f_bus)
+            tm = branch["tap"]
+
+            # set values for ccm
+            val_ccm = sol["branch"][string(i)]["csr_fr"]^2 + sol["branch"][string(i)]["csi_fr"]^2
+            
+            JuMP.set_start_value(ccm[i], val_ccm)
+
+            val_pf = sol["branch"][string(i)]["pf"]
+            val_qf = sol["branch"][string(i)]["qf"]
+    
+            JuMP.set_start_value(p[f_idx], val_pf)
+            JuMP.set_start_value(q[f_idx], val_qf)
+            
+            val_pt = sol["branch"][string(i)]["pt"]
+            val_qt = sol["branch"][string(i)]["qt"]
+            
+            JuMP.set_start_value(p[t_idx], val_pt)
+            JuMP.set_start_value(q[t_idx], val_qt)
+
+            val_sf = sqrt(val_pf^2 + val_qf^2)
+            val_st = sqrt(val_pt^2 + val_qt^2)
+
+            JuMP.set_start_value(s[f_idx], val_sf)
+            JuMP.set_start_value(s[t_idx], val_st)
+
+        end
+        # set values for gen variables
+        for (i,gen) in ref(pm, n, :gen)
+            val_pg = sol["gen"][string(i)]["pg"]
+            val_qg = sol["gen"][string(i)]["qg"]
+            JuMP.set_start_value(pg[i], val_pg)
+            JuMP.set_start_value(qg[i], val_qg)
+        end
+        # set values for bus variables
+        for (i,bus) in ref(pm, n, :bus)
+            val_vr = sol["bus"][string(i)]["vr"]
+            val_vi = sol["bus"][string(i)]["vi"]
+            val_w = val_vr^2 + val_vi^2
+            JuMP.set_start_value(w[i], val_w)
+        end
+    elseif warm_start_model === ACPPowerModel
+        # set values for branch variables
+        for (i,branch) in ref(pm, n, :branch)
+            f_bus = branch["f_bus"]
+            t_bus = branch["t_bus"]
+            f_idx = (i, f_bus, t_bus)
+            t_idx = (i, t_bus, f_bus)
+            tm = branch["tap"]
+
+            # set values for power flow variables
+            val_pf = sol["branch"][string(i)]["pf"]
+            val_qf = sol["branch"][string(i)]["qf"]
+
+            JuMP.set_start_value(p[f_idx], val_pf)
+            JuMP.set_start_value(q[f_idx], val_qf)
+
+            # calculate values of ccm
+            val_ccm = tm^2 * (val_pf^2 + val_qf^2) / sol["bus"][string(f_bus)]["vm"]^2
+            
+            JuMP.set_start_value(ccm[i], val_ccm)
+        end
+        # set values for gen variables
+        for (i,gen) in ref(pm, n, :gen)
+            val_pg = sol["gen"][string(i)]["pg"]
+            val_qg = sol["gen"][string(i)]["qg"]
+            JuMP.set_start_value(pg[i], val_pg)
+            JuMP.set_start_value(qg[i], val_qg)
+        end
+        # set values for bus variables
+        for (i,bus) in ref(pm, n, :bus)
+            val_vm = sol["bus"][string(i)]["vm"]
+            
+            val_w = val_vm^2
+            JuMP.set_start_value(w[i], val_w)
+        end
+    else
+        #TODO: add warm start for other models
+    end
+
 end
 
 function init_variables(pm, n=nw_id_default)
