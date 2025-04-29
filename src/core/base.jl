@@ -30,18 +30,30 @@ function solve_model(data::Dict{String,<:Any}, model_type::Type, optimizer, buil
     end
 
     start_time = time()
-    pm = instantiate_model(data, model_type, build_method; ref_extensions=ref_extensions, kwargs...)
+    # Extract the first parameter for IS_WARM_START if available
+    if !isempty(kwargs)
+        first_key, first_val = first(kwargs)
+        IS_WARM_START = first_val
+        remaining_kwargs = Dict(k => v for (k, v) in kwargs if k != first_key)
+        pm = instantiate_model(data, model_type, build_method; ref_extensions=ref_extensions, remaining_kwargs...)
+    else
+        IS_WARM_START = false
+        pm = instantiate_model(data, model_type, build_method; ref_extensions=ref_extensions)
+    end
     Memento.debug(_LOGGER, "pm model build time: $(time() - start_time)")
 
     # stress numerical stability of the warm start model
-    eps = 1e-15
-    optimizer = optimizer_with_attributes(optimizer)
-    set_optimizer_attribute(optimizer, "tol", eps) 
-    set_optimizer_attribute(optimizer, "constr_viol_tol", eps) 
-    set_optimizer_attribute(optimizer, "dual_inf_tol", eps)
-    set_optimizer_attribute(optimizer, "compl_inf_tol", eps)
-    set_optimizer_attribute(optimizer, "acceptable_tol", eps)
-    set_optimizer_attribute(optimizer, "acceptable_constr_viol_tol", eps)    
+    # println("IS_WARM_START: ", IS_WARM_START)
+    if occursin("Ipopt", string(optimizer)) && IS_WARM_START
+        eps = 1e-10
+        optimizer = optimizer_with_attributes(optimizer)
+        set_optimizer_attribute(optimizer, "tol", eps) 
+        set_optimizer_attribute(optimizer, "constr_viol_tol", eps) 
+        set_optimizer_attribute(optimizer, "dual_inf_tol", eps)
+        set_optimizer_attribute(optimizer, "compl_inf_tol", eps)
+        set_optimizer_attribute(optimizer, "acceptable_tol", eps)
+        set_optimizer_attribute(optimizer, "acceptable_constr_viol_tol", eps)  
+    end   
 
     start_time = time()
     result = optimize_model!(pm, relax_integrality=relax_integrality, optimizer=optimizer, solution_processors=solution_processors)

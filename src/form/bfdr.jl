@@ -2247,13 +2247,18 @@ function solution_adjustment(pm, sol, warm_start_model, nw=nw_id_default)
     JuMP.optimize!(aux_model)
 
     println("Objective value of aux_model: ", JuMP.objective_value(aux_model))
-    if JuMP.termination_status(aux_model) == MOI.OPTIMAL
+    warm_res = ref(pm, :warm_res)
+    warm_res["correction_time"] = JuMP.solve_time(aux_model)
+    warm_res["total_deviation"] = JuMP.objective_value(aux_model)
+    println("primal status:", JuMP.primal_status(aux_model))
+    println("termination status:", JuMP.termination_status(aux_model))
+    if has_values(aux_model)
         # get solution from aux_model
         aux_solution = Dict()
         for var in all_variables(aux_model)
             aux_solution[name(var)] = value(var)
         end
-
+        println("Feasible solution found. Status: ", JuMP.termination_status(aux_model))
         return aux_solution
     else
         println("No feasible solution found.")

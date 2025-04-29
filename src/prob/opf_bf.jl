@@ -36,10 +36,10 @@ function solve_opf_bf_dr(file, model_type::Type{T}, optimizer, is_warm_start=fal
         end
         if warm_start_model === IVRPowerModel
             println("Use IVRPowerModel as warm start model")
-            warm_res = solve_opf_iv(file, warm_start_model, warm_start_solver)
+            warm_res = solve_opf_iv(file, warm_start_model, warm_start_solver, is_warm_start=true)
         else
             println("Use other model as warm start model")
-            warm_res = solve_opf(file, warm_start_model, warm_start_solver)
+            warm_res = solve_opf(file, warm_start_model, warm_start_solver, is_warm_start=true)
         end
     end
     warm_res["is_warm_start"] = is_warm_start
