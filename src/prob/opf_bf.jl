@@ -1,6 +1,9 @@
 ""
 function solve_opf_bf(file, model_type::Type{T}, optimizer; kwargs...) where T <: AbstractBFModel
-    return solve_model(file, model_type, optimizer, build_opf_bf; kwargs...)
+    pm, result = solve_model(file, model_type, optimizer, build_opf_bf; kwargs...)
+    # calculate the violations
+    cal_violation_and_save(pm, model_type, result)
+    return result
 end
 
 """
@@ -47,6 +50,7 @@ function solve_opf_bf_dr(file, model_type::Type{T}, optimizer, is_warm_start=fal
     warm_res["warm_start_solver"] = warm_start_solver
     pm, result = get_and_solve_model(file, model_type, optimizer, build_opf_bf_dr, warm_res; kwargs...)
     # store the warm start model in the pm data
+    cal_violation_and_save(pm, model_type, result)
     return pm, result
 end
 

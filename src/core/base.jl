@@ -59,7 +59,11 @@ function solve_model(data::Dict{String,<:Any}, model_type::Type, optimizer, buil
     result = optimize_model!(pm, relax_integrality=relax_integrality, optimizer=optimizer, solution_processors=solution_processors)
     Memento.debug(_LOGGER, "pm model solve and solution time: $(time() - start_time)")
 
-    return result
+    if model_type == SOCBFPowerModel
+        return pm, result
+    else
+        return result
+    end
 end
 
 "get the model and solve it simultaneously"

@@ -2265,3 +2265,138 @@ function solution_adjustment(pm, sol, warm_start_model, nw=nw_id_default)
         return nothing
     end
 end
+
+function cal_violation_and_save(pm, model_type, result)
+    epsilon = 1e-6
+    result["violation"] = Dict()
+    res = result["solution"]
+    
+    if model_type == PowerModels.SOCBFPowerModel
+        abs_vio_list = Dict()
+        rel_vio_list = Dict()
+        for (i,branch) in ref(pm, :branch)
+            f_bus = branch["f_bus"]
+            t_bus = branch["t_bus"]
+            f_idx = (i, f_bus, t_bus)
+            tm = branch["tap"]
+
+            pf = res["branch"]["$(i)"]["pf"]
+            qf = res["branch"]["$(i)"]["qf"]
+            wf = res["bus"]["$(f_bus)"]["w"]
+            ccm = res["branch"]["$(i)"]["ccm"]
+
+            abs_vio = abs(pf^2 + qf^2 - (wf/tm^2) * ccm)
+            abs_vio_list[i] = abs_vio
+            rhs = (wf/tm^2 + ccm)/2
+            if rhs > epsilon
+                rel_vio = abs_vio / rhs^2
+            else
+                rel_vio = 0
+            end
+            rel_vio_list[i] = rel_vio
+
+        end
+        result["violation"]["abs_vio_list"] = abs_vio_list
+        result["violation"]["rel_vio_list"] = rel_vio_list
+        result["violation"]["max_abs_vio"] = find_max_pair(abs_vio_list)
+        result["violation"]["max_rel_vio"] = find_max_pair(rel_vio_list)
+        result["violation"]["cum_abs_vio"] = sum(values(abs_vio_list))
+        result["violation"]["cum_rel_vio"] = sum(values(rel_vio_list))
+    elseif model_type == PowerModels.SOCDRBFPowerModel
+        abs_vio_list = Dict()
+        rel_vio_list = Dict()
+        for (i,branch) in ref(pm, :branch)
+            f_bus = branch["f_bus"]
+            t_bus = branch["t_bus"]
+            f_idx = (i, f_bus, t_bus)
+            tm = branch["tap"]
+
+            pf = res["branch"]["$(i)"]["pf"]
+            qf = res["branch"]["$(i)"]["qf"]
+            wf = res["bus"]["$(f_bus)"]["w"]
+            ccm = res["branch"]["$(i)"]["ccm"]
+
+            abs_vio = abs(pf^2 + qf^2 - (wf/tm^2) * ccm)
+            abs_vio_list[i] = abs_vio
+            rhs = (wf/tm^2 + ccm)/2
+            if rhs > epsilon
+                rel_vio = abs_vio / rhs^2
+            else
+                rel_vio = 0
+            end
+            rel_vio_list[i] = rel_vio
+            # if i == 111
+            #     println("pf=", pf, " qf=", qf, " wf=", wf, " tm=", tm, " ccm=", ccm)
+            #     println("rhs^2= ", rhs^2, " rel_vio=", rel_vio)
+            # end
+
+        end
+        result["violation"]["abs_vio_list"] = abs_vio_list
+        result["violation"]["rel_vio_list"] = rel_vio_list
+        result["violation"]["max_abs_vio"] = find_max_pair(abs_vio_list)
+        result["violation"]["max_rel_vio"] = find_max_pair(rel_vio_list)
+        result["violation"]["cum_abs_vio"] = sum(values(abs_vio_list))
+        result["violation"]["cum_rel_vio"] = sum(values(rel_vio_list))
+
+        abs_pqvio_list = Dict()
+        rel_pqvio_list = Dict()
+        abs_vivio_list = Dict()
+        rel_vivio_list = Dict()
+        for (i,branch) in ref(pm, :branch)
+            f_bus = branch["f_bus"]
+            t_bus = branch["t_bus"]
+            f_idx = (i, f_bus, t_bus)
+            tm = branch["tap"]
+
+            pf = value(var(pm, :p)[f_idx])
+            qf = value(var(pm, :q)[f_idx])
+            s = value(var(pm, :s)[f_idx])   
+
+            abs_pqvio = abs(pf^2 + qf^2 - s^2)
+            abs_pqvio_list[i] = abs_pqvio
+            if s^2 > epsilon
+                rel_pqvio = abs_pqvio / s^2
+            else
+                rel_pqvio = 0
+            end
+            rel_pqvio_list[i] = rel_pqvio
+
+            vmi = value(var(pm, :vmi)[f_idx])
+            vpi = value(var(pm, :vpi)[f_idx])
+            abs_vivio = abs(s^2 + vmi^2 - vpi^2)
+            abs_vivio_list[i] = abs_vivio
+            if vpi^2 > epsilon
+                rel_vivio = abs_vivio / vpi^2
+            else
+                rel_vivio = 0
+            end
+            rel_vivio_list[i] = rel_vivio
+        end
+        result["violation"]["abs_pqvio_list"] = abs_pqvio_list
+        result["violation"]["rel_pqvio_list"] = rel_pqvio_list
+        result["violation"]["max_abs_pqvio"] = find_max_pair(abs_pqvio_list)
+        result["violation"]["max_rel_pqvio"] = find_max_pair(rel_pqvio_list)
+        result["violation"]["cum_abs_pqvio"] = sum(values(abs_pqvio_list))
+        result["violation"]["cum_rel_pqvio"] = sum(values(rel_pqvio_list))
+        result["violation"]["abs_vivio_list"] = abs_vivio_list
+        result["violation"]["rel_vivio_list"] = rel_vivio_list
+        result["violation"]["max_abs_vivio"] = find_max_pair(abs_vivio_list)
+        result["violation"]["max_rel_vivio"] = find_max_pair(rel_vivio_list)
+        result["violation"]["cum_abs_vivio"] = sum(values(abs_vivio_list))
+        result["violation"]["cum_rel_vivio"] = sum(values(rel_vivio_list))
+    end
+    
+end
+
+function find_max_pair(d)
+    if isempty(d)
+        error("字典为空，无法查找最大值")
+    end
+    max_key, max_val = first(d)
+    for (k, v) in d
+        if v > max_val
+            max_key, max_val = k, v
+        end
+    end
+    return max_key, max_val
+end
